@@ -1364,3 +1364,42 @@ def test_bodyless_methods_are_not_units(language):
     assert {f.name for f in fcx.functions} == units
     classes = {c.name: c for c in fcx.classes}
     assert classes["A"].method_count == a_methods
+
+
+def test_expression_body_scores_like_its_block_twin():
+    # A ternary as the whole body is a branch the function's CCN owns; only
+    # a block body used to reach the walker's branch accounting.
+    fns = _walk_source(
+        "export const arrow = (a: boolean, b: boolean) => a && b ? 1 : 2;\n"
+        "function block(a: boolean, b: boolean) { return a && b ? 1 : 2; }\n",
+        "typescript",
+        "expression_body.ts",
+    )
+    arrow, block = fns["arrow"], fns["block"]
+    assert arrow.ccn == block.ccn == 3
+    assert [(c.enclosing_construct, c.operator_count) for c in arrow.complex_conditions] == [
+        ("ternary", 1)
+    ]
+
+
+def test_python_lambda_scores_like_its_def_twin():
+    fns = _walk_source(
+        "g = lambda a, b: 1 if a and b else 2\n"
+        "def h(a, b):\n"
+        "    return 1 if a and b else 2\n",
+        "python",
+        "expression_body.py",
+    )
+    assert fns["<anonymous@1>"].ccn == fns["h"].ccn == 3
+    assert [
+        (c.enclosing_construct, c.operator_count) for c in fns["<anonymous@1>"].complex_conditions
+    ] == [("ternary", 1)]
+
+
+def test_scala_expression_body_counts_its_if():
+    fns = _walk_source(
+        "def f(a: Boolean): Int = if (a) 1 else 2\n",
+        "scala",
+        "expression_body.scala",
+    )
+    assert fns["f"].ccn == 2

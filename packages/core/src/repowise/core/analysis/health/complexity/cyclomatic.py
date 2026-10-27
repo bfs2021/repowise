@@ -420,7 +420,9 @@ def _walk_function_body(
     deepest_depth = 0
     deepest_node: list[Node] = []
 
-    def _recurse(node: Node, depth: int, in_markup: bool = False, scope: int = 0) -> None:
+    def _recurse(
+        node: Node, depth: int, in_markup: bool = False, scope: int = 0, stepped: bool = False
+    ) -> None:
         nonlocal ccn, max_nesting, cognitive, deepest_depth
 
         # Don't descend into nested function bodies — they're walked
@@ -429,7 +431,7 @@ def _walk_function_body(
         node_type = node.type
         if node_type in lmap.function_kinds:
             return
-        if tally is not None and node_type in tally.kinds.watched:
+        if tally is not None and not stepped and node_type in tally.kinds.watched:
             scope = step(tally, node, scope)
 
         nesting_increment = 0
@@ -521,23 +523,38 @@ def _walk_function_body(
             _recurse(child, new_depth, child_markup, scope)
 
     root_scope = 0
+    # ``_Siblings`` (dispatch analysis) is a synthetic container with no
+    # node type of its own; it keeps the child-by-child walk.
+    body_type = getattr(body_node, "type", None)
     if (
         tally is not None
-        and body_node.type in tally.kinds.watched
-        and body_node.type not in lmap.function_kinds
-        and body_node.type not in lmap.lambda_kinds
+        and body_type in tally.kinds.watched
+        and body_type not in lmap.function_kinds
+        and body_type not in lmap.lambda_kinds
     ):
         root_scope = step(tally, body_node, 0)
-    for child in body_node.children:
-        # Per-child peak depth: temporarily swap max_nesting out so we
-        # can read just this child's contribution, then restore.
-        outer_max = max_nesting
-        max_nesting = 0
-        _recurse(child, 0, scope=root_scope)
-        child_peak = max_nesting
-        max_nesting = max(outer_max, child_peak)
-        if child_peak >= 2:
-            bumps += 1
+    if (
+        body_type is not None
+        and body_type not in lmap.block_kinds
+        and body_type not in lmap.function_kinds
+        and body_type not in lmap.lambda_kinds
+    ):
+        # An expression body (a TS arrow's ternary, a Python lambda, a
+        # Scala ``= if``) is the function's logic itself, not a container
+        # for it: visit the node so its own branch counts. ``tally`` has
+        # already stepped it above, hence ``stepped``.
+        _recurse(body_node, 0, scope=root_scope, stepped=True)
+    else:
+        for child in body_node.children:
+            # Per-child peak depth: temporarily swap max_nesting out so we
+            # can read just this child's contribution, then restore.
+            outer_max = max_nesting
+            max_nesting = 0
+            _recurse(child, 0, scope=root_scope)
+            child_peak = max_nesting
+            max_nesting = max(outer_max, child_peak)
+            if child_peak >= 2:
+                bumps += 1
 
     if deepest is not None and deepest_node:
         block = _widened_block(deepest_node[0], body_node, lmap)
