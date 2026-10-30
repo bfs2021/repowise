@@ -78,7 +78,14 @@ _EXTENSION_LANGUAGES = frozenset({"csharp", "kotlin"})
 # Bitwise members of Kotlin's ``Int`` and ``Long`` and the parameter type each
 # takes (None: the receiver's own). A member beats a same-named extension
 # wherever it accepts the argument, so ``i and 0x3f`` is ``Int.and(Int)``.
-_KOTLIN_BITWISE_MEMBERS = {"and": None, "or": None, "xor": None, "shl": "Int", "shr": "Int", "ushr": "Int"}
+_KOTLIN_BITWISE_MEMBERS = {
+    "and": None,
+    "or": None,
+    "xor": None,
+    "shl": "Int",
+    "shr": "Int",
+    "ushr": "Int",
+}
 # Members an extension of the same name can never beat: those of Kotlin's
 # ``Any``, which every type has, and the common ones of the builtin types a
 # library declares, which the repo's index cannot see. Not exhaustive.
@@ -119,8 +126,13 @@ _JAVA_ANY_TYPE = r"[\w$]+(?:\.[\w$]+)*(?:<[^;{}()]*>)?(?:\[\])*(?:\.\.\.)?"
 _JAVA_ANY_DECLARATION = re.compile(
     rf"(?<![\w.@$])(?P<type>{_JAVA_ANY_TYPE})\s+(?P<name>[\w$]+)\s*(?=[=;,):])"
 )
-# ``in``: ``foreach (var x in Items)`` declares no ``Items``.
-_NOT_A_TYPE = frozenset({"return", "throw", "new", "else", "case", "yield", "assert", "in"})
+# ``in``: ``foreach (var x in Items)`` declares no ``Items``. ``is``, ``as``
+# and ``instanceof``: ``o is Engine`` and ``o as Motor`` test or cast a type,
+# they declare no ``Engine`` or ``Motor`` (``o is Engine e`` still declares
+# ``e``, whose name follows the type).
+_NOT_A_TYPE = frozenset(
+    {"return", "throw", "new", "else", "case", "yield", "assert", "in", "is", "as", "instanceof"}
+)
 
 
 # Languages whose grammar mints ``a.b.c.m()`` with the dotted path as its
@@ -157,6 +169,7 @@ def _awaited_type(raw: str, language: str | None) -> str | None:
         return future.group(1)
     # A C# awaitable that is no Task<T> yields no type written here.
     return None if language == "csharp" else raw
+
 
 _T = TypeVar("_T", bound=tuple)
 
@@ -544,9 +557,7 @@ class ReceiverTypingMixin(
 
         return self._receiver_pair_match(file_path, key, spelled)
 
-    def _import_bound_method(
-        self, file_path: str, bound: str, key: tuple[str, str]
-    ) -> str | None:
+    def _import_bound_method(self, file_path: str, bound: str, key: tuple[str, str]) -> str | None:
         """The method *key* names on a type an import bound to the file *bound*."""
         sym_id = self._file_methods.get(bound, {}).get(key)
         if sym_id is not None:
@@ -688,7 +699,11 @@ class ReceiverTypingMixin(
         fields = self._field_types_in(class_file, language).get(class_id, {})
         if name in fields:
             field = fields[name]
-            return None if builtin_local and external_type_name(field) else (field, "field", class_file)
+            return (
+                None
+                if builtin_local and external_type_name(field)
+                else (field, "field", class_file)
+            )
         if builtin_local:
             return None
         extended = self._extended_class_field(file_path, caller_id, name, language)
@@ -916,13 +931,17 @@ class ReceiverTypingMixin(
         marks = scan_scope_marks(text, language)
         chains = {}
         open_functions: list[tuple[Symbol, _Scope]] = []
-        symbols = sorted(parsed.symbols if parsed else (), key=lambda s: (s.start_line, -s.end_line))
+        symbols = sorted(
+            parsed.symbols if parsed else (), key=lambda s: (s.start_line, -s.end_line)
+        )
         for symbol in symbols:
             while open_functions and open_functions[-1][0].end_line < symbol.start_line:
                 open_functions.pop()
             own = _scope_of(symbol, bindings, marks)
             enclosing = tuple(
-                scope for outer, scope in reversed(open_functions) if symbol.end_line <= outer.end_line
+                scope
+                for outer, scope in reversed(open_functions)
+                if symbol.end_line <= outer.end_line
             )
             chains[symbol.id] = (own, *enclosing)
             if symbol.kind in _FUNCTION_KINDS:
@@ -1072,11 +1091,7 @@ class ReceiverTypingMixin(
         """
         scope = self._symbols_by_id.get(scope_id or "")
         written = type_name.rstrip("?")
-        if (
-            scope is None
-            or scope.language not in ("dart", "kotlin")
-            or not written.isidentifier()
-        ):
+        if scope is None or scope.language not in ("dart", "kotlin") or not written.isidentifier():
             return None
         found = self._class_seen_from(file_path, scope.id, written, scope.start_line)
         return None if found is None else self._located(file_path, found.callee_id)
@@ -1118,8 +1133,9 @@ class ReceiverTypingMixin(
         host = self._capture_host(file_path, caller_id, language, receiver_name, body_types)
         while host is not None:
             body_types = self._captured_types(file_path, host, caller_id, language)
-            caller_id, host = host, self._capture_host(
-                file_path, host, language, receiver_name, body_types
+            caller_id, host = (
+                host,
+                self._capture_host(file_path, host, language, receiver_name, body_types),
             )
         return caller_id, body_types
 
